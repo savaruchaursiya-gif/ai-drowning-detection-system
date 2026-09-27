@@ -1,0 +1,131 @@
+import streamlit as st
+import cv2
+import numpy as np
+import time
+import tempfile
+from ultralytics import YOLO
+
+# -------------------- LOAD MODEL --------------------
+model = YOLO("yolov8n.pt")
+
+# -------------------- PAGE SETTINGS --------------------
+st.set_page_config(
+    page_title="AI Drowning Detection System",
+    layout="wide"
+)
+
+# -------------------- CUSTOM STYLING --------------------
+st.markdown("""
+    <style>
+    .main-title {
+        text-align: center;
+        font-size: 45px;
+        color: #00FFFF;
+        font-weight: bold;
+    }
+    .sub-title {
+        text-align: center;
+        font-size: 20px;
+        color: white;
+    }
+    .stButton>button {
+        background-color: #0077b6;
+        color: white;
+        font-size: 18px;
+        border-radius: 10px;
+        height: 3em;
+        width: 200px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.markdown('<p class="main-title">🏊 AI Drowning Detection System</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Computer Vision Based Pool Safety Monitoring</p>', unsafe_allow_html=True)
+
+# -------------------- INPUT OPTION --------------------
+option = st.radio("Choose Input Source:", ["Upload Video", "Live Camera"])
+
+# -------------------- DETECTION FUNCTION --------------------
+def detect_drowning(video_source):
+
+    cap = cv2.VideoCapture(video_source)
+    stframe = st.empty()
+
+    prev_centers = {}
+    no_movement_timer = {}
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        results = model(frame)
+
+        current_centers = {}
+
+        for result in results:
+            boxes = result.boxes
+
+            for box in boxes:
+                cls = int(box.cls[0])
+
+                # Class 0 = Person
+                if cls == 0:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    center = ((x1 + x2) // 2, (y1 + y2) // 2)
+
+                    current_centers[center] = time.time()
+
+                    # Draw bounding box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, "Person", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+        # Movement Analysis
+        for center in current_centers:
+            if center in prev_centers:
+                movement = np.linalg.norm(
+                    np.array(center) - np.array(prev_centers[center])
+                )
+
+                # If very small movement → possible drowning
+                if movement < 5:
+                    if center not in no_movement_timer:
+                        no_movement_timer[center] = time.time()
+                    elif time.time() - no_movement_timer[center] > 5:
+                        cv2.putText(frame,
+                                    "⚠ DROWNING ALERT!",
+                                    (50, 60),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    1.5,
+                                    (0, 0, 255),
+                                    4)
+                else:
+                    no_movement_timer[center] = time.time()
+
+        prev_centers = current_centers
+
+        stframe.image(frame, channels="BGR")
+
+    cap.release()
+
+
+# -------------------- UPLOAD VIDEO --------------------
+if option == "Upload Video":
+
+    uploaded_file = st.file_uploader(
+        "Upload Swimming Pool Video",
+        type=["mp4", "avi", "mov"]
+    )
+
+    if uploaded_file is not None:
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(uploaded_file.read())
+        detect_drowning(tfile.name)
+
+
+# -------------------- LIVE CAMERA --------------------
+elif option == "Live Camera":
+
+    if st.button("Start Camera"):
+        detect_drowning(0)
